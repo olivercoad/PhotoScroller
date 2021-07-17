@@ -18,6 +18,7 @@ type State = {
     fileIndex : int
     slideshowEnabled : bool
     errorMessage : string option
+    lastScrollTimestamp : uint64
 }
 
 type PhotoState = {
@@ -98,25 +99,25 @@ let init path =
             let fullName = Path.GetFullPath path
             let idx = Array.findIndex (fun (x:FileInfo) -> fullName = x.FullName) dirFiles
             
-            { currentFolder = currentFolder; dirFiles = Some dirFiles; fileIndex = idx; slideshowEnabled = false; errorMessage = None },
+            { currentFolder = currentFolder; dirFiles = Some dirFiles; fileIndex = idx; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
             Cmd.ofSub slideshowSub
         else if Directory.Exists path then
             let currentFolder = DirectoryInfo(path)
             
-            { currentFolder = currentFolder; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = None },
+            { currentFolder = currentFolder; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
             Cmd.batch [
                 Cmd.ofMsg LoadFiles
                 Cmd.ofSub slideshowSub
             ]
         else
             let msg = "path is not a file or directory"
-            { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg },
+            { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
             Cmd.none
             
     with
     | e ->
         let msg = e.Message
-        { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg },
+        { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
         Cmd.none
 
 let update (msg: Msg) (state: State) : State * Cmd<Msg> =
@@ -130,16 +131,25 @@ let update (msg: Msg) (state: State) : State * Cmd<Msg> =
             state, Cmd.none
         else
             e.Handled <- true
-            if e.Delta.X < 0. then
-                { state with fileIndex = 0 }, Cmd.ofMsg Decrement
-            else if e.Delta.X > 0. then
-                { state with fileIndex = (match state.dirFiles with | None -> 0 | Some arr -> arr.Length - 1) }, Cmd.ofMsg Increment
-            else if e.Delta.Y < 0. then
-                state, Cmd.ofMsg Increment
-            else if e.Delta.Y > 0. then
-                state, Cmd.ofMsg Decrement
-            else
+            // throttle scroll for touchpad that outputs hundreds of fractional deltas
+            let isDetentedScroll = (Math.Abs ((e.Delta.X + e.Delta.Y) % 1.)) < Double.Epsilon // delta should be an integer if detented scroll
+            let throttleScrollTime = uint64 (50. / (0.1 + Math.Abs (e.Delta.X + e.Delta.Y))) // milliseconds
+            if e.Timestamp - state.lastScrollTimestamp < throttleScrollTime && not isDetentedScroll
+            then
                 state, Cmd.none
+            else
+                let state = { state with lastScrollTimestamp = e.Timestamp }
+
+                if e.Delta.X < -0.1 then
+                    { state with fileIndex = 0 }, Cmd.ofMsg Decrement
+                else if e.Delta.X > 0.1 then
+                    { state with fileIndex = (match state.dirFiles with | None -> 0 | Some arr -> arr.Length - 1) }, Cmd.ofMsg Increment
+                else if e.Delta.Y < 0. then
+                    state, Cmd.ofMsg Increment
+                else if e.Delta.Y > 0. then
+                    state, Cmd.ofMsg Decrement
+                else
+                    state, Cmd.none
     | Increment ->
         match state.dirFiles with
         | None -> state, Cmd.none

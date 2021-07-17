@@ -1,0 +1,11 @@
+<Styles
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Style Selector="TextBlock.fileinfo">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="TextBlock.fileinfo:pointerover">
+        <Setter Property="Background" Value="Black" />
+    </Style>
+</Styles>

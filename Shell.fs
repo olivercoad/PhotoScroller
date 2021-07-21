@@ -87,5 +87,6 @@ type MainWindow(path) as this =
 
         Elmish.Program.mkProgram (fun () -> PhotoScroller.init path) PhotoScroller.update PhotoScroller.view
         |> Program.withHost host
+        |> Program.withErrorHandler (fun (text, ex) -> eprintfn "%s: %A" text ex)
         |> Program.run
 

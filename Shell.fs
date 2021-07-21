@@ -85,8 +85,8 @@ type MainWindow(path) as this =
                 else
                     this.BeginMoveDrag e)
 
-        Elmish.Program.mkProgram (fun () -> PhotoScroller.init path) PhotoScroller.update PhotoScroller.view
+        Elmish.Program.mkProgram PhotoScroller.init PhotoScroller.update PhotoScroller.view
         |> Program.withHost host
         |> Program.withErrorHandler (fun (text, ex) -> eprintfn "%s: %A" text ex)
-        |> Program.run
+        |> Program.runWith path
 

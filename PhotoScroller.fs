@@ -31,9 +31,9 @@ let goodExts = Set.ofList [ ".jpg"; ".jpeg"; ".png"; ".cr2" ]
 let loadBitmapFromFile (fileName:string) =
     let ext = (Path.GetExtension fileName).ToLowerInvariant()
     if Set.contains ext goodExts then
-        Result.Ok (new Bitmap(fileName))
+        Ok (new Bitmap(fileName))
     else
-        Result.Error "bad file ext"
+        Error "unsupported file extension"
 
 let mutable photoState : PhotoState option = None
 let loadPhoto fileName =
@@ -41,7 +41,7 @@ let loadPhoto fileName =
         try
             loadBitmapFromFile fileName
         with
-        | e -> Result.Error e.Message
+        | e -> Error e.Message
     match res with
     | Ok _ ->
         System.Console.WriteLine("Loaded photo " + fileName)
@@ -151,39 +151,40 @@ let update (msg: Msg) (state: State) : State * Cmd<Msg> =
                 else
                     state, Cmd.none
     | Increment ->
-        match state.dirFiles with
-        | None -> state, Cmd.none
-        | Some dirFiles ->
-            if state.fileIndex + 1 >= dirFiles.Length then
-                // load next directory
+        let isEndOfDirectory =
+            match state.dirFiles with
+            | Some f -> state.fileIndex + 1 >= f.Length
+            | None -> true
+        if isEndOfDirectory then
+            // load next directory
+            let parentDir = state.currentFolder.Parent
+            let folders = parentDir.GetDirectories() |> sortFilesDirs
+            let idx = Array.findIndex (fun (x:DirectoryInfo) -> state.currentFolder.FullName = x.FullName) folders
+            let nextFolder, goIn = if idx + 1 >= folders.Length then (parentDir, false) else (folders.[idx + 1], true)
+            { state with currentFolder = nextFolder; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesInc goIn)
+        else
+            { state with fileIndex = state.fileIndex + 1 }, Cmd.none
+    | Decrement ->
+        let isStartOfDirectory =
+            match state.dirFiles with
+            | Some f -> state.fileIndex - 1 < 0 || f.Length = 0
+            | None -> true
+        if isStartOfDirectory then
+            // load into directories
+            let directories = state.currentFolder.GetDirectories() |> sortFilesDirs
+            if directories.Length > 0 then
+                { state with currentFolder = directories.[directories.Length - 1]; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec false)
+            else
+                // load previous directory
                 let parentDir = state.currentFolder.Parent
                 let folders = parentDir.GetDirectories() |> sortFilesDirs
                 let idx = Array.findIndex (fun (x:DirectoryInfo) -> state.currentFolder.FullName = x.FullName) folders
-                let nextFolder, goIn = if idx + 1 >= folders.Length then (parentDir, false) else (folders.[idx + 1], true)
-                { state with currentFolder = nextFolder; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesInc goIn)
-            else
-                { state with fileIndex = state.fileIndex + 1 }, Cmd.none
-    | Decrement ->
-        match state.dirFiles with
-        | None ->
-            state, Cmd.none
-        | Some dirFiles ->
-            if state.fileIndex - 1 < 0 || dirFiles.Length = 0 then
-                // load into directories
-                let directories = state.currentFolder.GetDirectories() |> sortFilesDirs
-                if directories.Length > 0 then
-                    { state with currentFolder = directories.[directories.Length - 1]; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec false)
+                if idx > 0 then
+                    { state with currentFolder = folders.[idx - 1]; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec false)
                 else
-                    // load previous directory
-                    let parentDir = state.currentFolder.Parent
-                    let folders = parentDir.GetDirectories() |> sortFilesDirs
-                    let idx = Array.findIndex (fun (x:DirectoryInfo) -> state.currentFolder.FullName = x.FullName) folders
-                    if idx > 0 then
-                        { state with currentFolder = folders.[idx - 1]; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec false)
-                    else
-                        { state with currentFolder = state.currentFolder.Parent; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec true)
-            else
-                { state with fileIndex = state.fileIndex - 1 }, Cmd.none
+                    { state with currentFolder = state.currentFolder.Parent; dirFiles = None; fileIndex = 0 }, Cmd.ofMsg (LoadFilesDec true)
+        else
+            { state with fileIndex = state.fileIndex - 1 }, Cmd.none
     | LoadFilesInc goIn ->
         let dirFolders = state.currentFolder.GetDirectories() |> sortFilesDirs
         if dirFolders.Length > 0 && goIn then
@@ -205,7 +206,25 @@ let update (msg: Msg) (state: State) : State * Cmd<Msg> =
             let dirFiles = state.currentFolder.GetFiles() |> sortFilesDirs
             { state with dirFiles = Some dirFiles; fileIndex = dirFiles.Length }, Cmd.ofMsg Decrement
     | LoadFiles -> { state with dirFiles = Some (state.currentFolder.GetFiles() |> sortFilesDirs) }, Cmd.none
-    
+
+let viewFile (file:FileInfo) =
+    let fileName = file.FullName
+    match getPhoto fileName with
+    | Ok bitmap ->
+        Image.create [
+            Image.verticalAlignment VerticalAlignment.Center
+            Image.horizontalAlignment HorizontalAlignment.Center
+            Image.stretch Stretch.Uniform
+            Image.source bitmap
+        ] :> Avalonia.FuncUI.Types.IView
+    | Error msg ->
+        TextBlock.create [
+            TextBlock.fontSize 24.
+            TextBlock.textAlignment TextAlignment.Center
+            TextBlock.verticalAlignment VerticalAlignment.Center
+            TextBlock.text msg
+        ] :> Avalonia.FuncUI.Types.IView
+
 let view (state: State) (dispatch) =
     Grid.create [
         Grid.onPointerWheelChanged (ScrollEvent >> dispatch)
@@ -214,41 +233,6 @@ let view (state: State) (dispatch) =
 
         Grid.children [
             match state.errorMessage with
-            | None ->
-                Image.create [
-                    let bitmap =
-                        match state.dirFiles with
-                        | None -> null
-                        | Some df ->
-                            if df.Length > state.fileIndex && state.fileIndex >= 0 then
-                                let fi = df.[state.fileIndex]
-                                let fileName = fi.FullName
-                                match getPhoto fileName with
-                                | Ok bitmap -> bitmap
-                                | Error _ -> null
-                            else
-                                null
-                    Image.source bitmap
-                    Image.verticalAlignment VerticalAlignment.Center
-                    Image.horizontalAlignment HorizontalAlignment.Center
-                    Image.stretch Stretch.Uniform
-                ]
-                TextBlock.create [
-                    let text =
-                        match state.dirFiles with
-                        | None -> "none"
-                        | Some df ->
-                            if df.Length > state.fileIndex && state.fileIndex >= 0 then
-                                let fi = df.[state.fileIndex]
-                                sprintf " (%03i/%03i)  %s" (state.fileIndex + 1) (df.Length) fi.FullName
-                            else
-                                "index out of range"
-                    TextBlock.text text
-                    TextBlock.verticalAlignment VerticalAlignment.Bottom
-                    TextBlock.horizontalAlignment HorizontalAlignment.Left
-                    TextBlock.padding (0., 3., 3., 0.)
-                    TextBlock.classes [ "fileinfo" ]
-                ]
             | Some message ->
                 TextBlock.create [
                     TextBlock.text message
@@ -256,5 +240,40 @@ let view (state: State) (dispatch) =
                     TextBlock.textAlignment TextAlignment.Center
                     TextBlock.verticalAlignment VerticalAlignment.Center
                 ]
+            | None ->
+                let dirFiles =
+                    match state.dirFiles with
+                    | Some dirFiles ->
+                        dirFiles
+                    | None -> 
+                        // dispatch LoadFiles
+                        [||]
+                let idx = state.fileIndex
+                let file, text =
+                    if Array.isEmpty dirFiles then
+                        null, sprintf "(no files) %s" state.currentFolder.FullName
+                    else if idx < 0 || state.fileIndex >= dirFiles.Length then
+                        null, sprintf "(%03i/%03i index error) %s" (idx + 1) dirFiles.Length state.currentFolder.FullName
+                    else
+                        let file = dirFiles.[idx]
+                        file, sprintf "(%03i/%03i)  %s" (idx + 1) dirFiles.Length file.FullName
+
+                if (isNull file) then
+                    TextBlock.create [
+                        TextBlock.text "No file"
+                        TextBlock.fontSize 24.
+                        TextBlock.textAlignment TextAlignment.Center
+                        TextBlock.verticalAlignment VerticalAlignment.Center
+                    ]
+                else
+                    viewFile file
+
+                TextBlock.create [
+                    TextBlock.text text
+                    TextBlock.verticalAlignment VerticalAlignment.Bottom
+                    TextBlock.horizontalAlignment HorizontalAlignment.Left
+                    TextBlock.padding (0., 3., 3., 0.)
+                    TextBlock.classes [ "fileinfo" ]
+                ]
         ]
-    ]       
+    ]

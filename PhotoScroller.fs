@@ -50,6 +50,7 @@ let loadPhoto fileName =
 
     photoState <- Some { FileName = fileName; Bitmap = res }
     res
+
 let getPhoto fileName =
     match photoState with
     | Some { FileName = fn; Bitmap = res } when fn = fileName ->
@@ -69,6 +70,7 @@ type Msg =
     | ScrollEvent of PointerWheelEventArgs
     | SlideshowTick
     | ToggleSlideshow
+    | Keypress of KeyEventArgs
 
 let digitsRegex = Regex("\d+")
 let toSortable (fi:FileSystemInfo) =
@@ -120,8 +122,21 @@ let init path =
         { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
         Cmd.none
 
+let handleKeypress (k:KeyEventArgs) =
+    match k.KeyModifiers, k.Key with
+    | KeyModifiers.None, Key.Left -> Some Decrement
+    | KeyModifiers.None, Key.Right -> Some Increment
+    | _ -> None
+
 let update (msg: Msg) (state: State) : State * Cmd<Msg> =
     match msg with
+    | Keypress k ->
+        match handleKeypress k with
+        | Some msg ->
+            k.Handled <- true
+            state, Cmd.ofMsg msg
+        | None ->
+            state, Cmd.none
     | ToggleSlideshow ->
         { state with slideshowEnabled = not state.slideshowEnabled }, Cmd.none
     | SlideshowTick ->
@@ -229,6 +244,8 @@ let view (state: State) (dispatch) =
     Grid.create [
         Grid.onPointerWheelChanged (ScrollEvent >> dispatch)
         Grid.onDoubleTapped (fun _ -> dispatch ToggleSlideshow)
+        Grid.onKeyDown (Keypress >> dispatch)
+        Grid.focusable true
         Grid.background "black"
 
         Grid.children [

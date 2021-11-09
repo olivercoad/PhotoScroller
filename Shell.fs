@@ -12,17 +12,6 @@ open Avalonia.FuncUI.Components.Hosts
 open Avalonia.FuncUI.Elmish
 open Avalonia.Media
 
-type Command(action) =
-    interface System.Windows.Input.ICommand with
-        member this.CanExecute(parameter: obj) : bool = true
-
-        [<CLIEvent>]
-        override this.CanExecuteChanged : IEvent<System.EventHandler, System.EventArgs> = (new Event<_, _>()).Publish
-
-        member this.Execute(parameter: obj) : unit = action ()
-
-
-
 type MainWindow(path) as this =
     inherit Window()
 
@@ -32,7 +21,7 @@ type MainWindow(path) as this =
         this.Height <- 600.0
         this.MinWidth <- 400.0
         this.MinHeight <- 300.0
-        this.WindowState <- WindowState.FullScreen
+        // this.WindowState <- WindowState.FullScreen
 
         //this.VisualRoot.VisualRoot.Renderer.DrawFps <- true
         //this.VisualRoot.VisualRoot.Renderer.DrawDirtyRects <- true
@@ -47,13 +36,6 @@ type MainWindow(path) as this =
 
             this.Icon <- WindowIcon(ic)
 
-        let escHotkey = KeyBinding()
-        escHotkey.Gesture <- KeyGesture(Key.Escape)
-        escHotkey.Command <- Command(this.Close)
-
-        base.KeyBindings.Add(escHotkey)
-
-
         let toggleFullscreen () =
             match this.WindowState with
             | WindowState.FullScreen -> this.WindowState <- WindowState.Normal
@@ -62,18 +44,29 @@ type MainWindow(path) as this =
             | WindowState.Minimized
             | _ -> this.WindowState <- WindowState.FullScreen
 
-        let fullscreenHotkey = KeyBinding()
-        fullscreenHotkey.Gesture <- KeyGesture(Key.F11)
-        fullscreenHotkey.Command <- Command(toggleFullscreen)
-
-        base.KeyBindings.Add(fullscreenHotkey)
-
         let content = Grid()
         this.Content <- content
 
 
         let host = HostControl()
         content.Children.Add host
+
+        let setFocus () =
+            let g = host.Content :?> Grid
+            if g.Name <> "main-grid-for-focus" then
+                failwith "Host content is not the main grid to focus"
+            else
+                let doFocus () =
+                    printfn "Setting focus on %s" g.Name
+                    g.Focus()
+                if g.IsInitialized then doFocus ()
+                else
+                    printfn "Grid %s is not yet initialized. Will set focus when initialized" g.Name
+                    g.Initialized.Add (fun _ -> doFocus ())
+
+#if DEBUG
+        this.AttachDevTools() // use F12 to open devtools
+#endif
 
         // with ExtendClientAreaToDecorationsHint and rendering the image where the titlebar would be,
         // we need to make something draggable in the absence of draggable titlebar.
@@ -85,8 +78,14 @@ type MainWindow(path) as this =
                 else
                     this.BeginMoveDrag e)
 
+        let applicationComm = {
+            PhotoScroller.ToggleFullscreen = toggleFullscreen
+            PhotoScroller.Close = this.Close
+            PhotoScroller.SetFocus = setFocus
+        }
+
         Elmish.Program.mkProgram PhotoScroller.init PhotoScroller.update PhotoScroller.view
         |> Program.withHost host
         |> Program.withErrorHandler (fun (text, ex) -> eprintfn "%s: %A" text ex)
-        |> Program.runWith path
+        |> Program.runWith (applicationComm, path)
 

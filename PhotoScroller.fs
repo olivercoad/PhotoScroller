@@ -11,8 +11,16 @@ open Avalonia.Media
 open System
 open Avalonia.Threading
 open System.Text.RegularExpressions
+
+[<ReferenceEquality>]
+type ApplicationComm = {
+    Close: unit -> unit
+    ToggleFullscreen: unit -> unit
+    SetFocus: unit -> unit
+}
     
 type State = {
+    applicationComm : ApplicationComm
     currentFolder : DirectoryInfo
     dirFiles : FileInfo array option
     fileIndex : int
@@ -70,6 +78,9 @@ type Msg =
     | ScrollEvent of PointerWheelEventArgs
     | SlideshowTick
     | ToggleSlideshow
+    | Quit
+    | ToggleFullscreen
+    | SetFocus
     | Keypress of KeyEventArgs
 
 let digitsRegex = Regex("\d+")
@@ -93,7 +104,7 @@ let slideshowSub dispatch =
         true
     DispatcherTimer.Run(Func<bool>(invoke), TimeSpan.FromMilliseconds 500.0) |> ignore
 
-let init path =
+let init (applicationComm, path) =
     try
         if File.Exists path then
             let currentFolder = DirectoryInfo(Path.GetDirectoryName path)
@@ -101,31 +112,41 @@ let init path =
             let fullName = Path.GetFullPath path
             let idx = Array.findIndex (fun (x:FileInfo) -> fullName = x.FullName) dirFiles
             
-            { currentFolder = currentFolder; dirFiles = Some dirFiles; fileIndex = idx; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
-            Cmd.ofSub slideshowSub
+            { applicationComm = applicationComm; currentFolder = currentFolder; dirFiles = Some dirFiles; fileIndex = idx; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
+            Cmd.batch [ Cmd.ofMsg SetFocus; Cmd.ofSub slideshowSub ]
         else if Directory.Exists path then
             let currentFolder = DirectoryInfo(path)
             
-            { currentFolder = currentFolder; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
+            { applicationComm = applicationComm; currentFolder = currentFolder; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = None; lastScrollTimestamp = 0uL },
             Cmd.batch [
+                Cmd.ofMsg SetFocus
                 Cmd.ofMsg LoadFiles
                 Cmd.ofSub slideshowSub
             ]
         else
             let msg = "path is not a file or directory"
-            { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
-            Cmd.none
+            { applicationComm = applicationComm; currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
+            Cmd.batch [
+                Cmd.ofMsg SetFocus
+            ]
             
     with
     | e ->
         let msg = e.Message
-        { currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
-        Cmd.none
+        { applicationComm = applicationComm; currentFolder = null; dirFiles = None; fileIndex = 0; slideshowEnabled = false; errorMessage = Some msg; lastScrollTimestamp = 0uL },
+        Cmd.batch [
+            Cmd.ofMsg SetFocus // must set focus even when error so that at least hotkeys to exit work
+        ]
 
 let handleKeypress (k:KeyEventArgs) =
     match k.KeyModifiers, k.Key with
     | KeyModifiers.None, Key.Left -> Some Decrement
     | KeyModifiers.None, Key.Right -> Some Increment
+    | KeyModifiers.None, Key.Q -> Some Quit
+    | KeyModifiers.None, Key.Escape -> Some Quit
+    | KeyModifiers.Control, Key.W -> Some Quit
+    | KeyModifiers.None, Key.F11 -> Some ToggleFullscreen
+    | KeyModifiers.None, Key.F -> Some ToggleFullscreen
     | _ -> None
 
 let update (msg: Msg) (state: State) : State * Cmd<Msg> =
@@ -221,6 +242,15 @@ let update (msg: Msg) (state: State) : State * Cmd<Msg> =
             let dirFiles = state.currentFolder.GetFiles() |> sortFilesDirs
             { state with dirFiles = Some dirFiles; fileIndex = dirFiles.Length }, Cmd.ofMsg Decrement
     | LoadFiles -> { state with dirFiles = Some (state.currentFolder.GetFiles() |> sortFilesDirs) }, Cmd.none
+    | Quit ->
+        state.applicationComm.Close ()
+        state, Cmd.none
+    | ToggleFullscreen ->
+        state.applicationComm.ToggleFullscreen ()
+        state, Cmd.none
+    | SetFocus ->
+        state.applicationComm.SetFocus ()
+        state, Cmd.none
 
 let viewFile (file:FileInfo) =
     let fileName = file.FullName
@@ -247,6 +277,7 @@ let view (state: State) (dispatch) =
         Grid.onKeyDown (Keypress >> dispatch)
         Grid.focusable true
         Grid.background "black"
+        Grid.name "main-grid-for-focus" // used to identify control to focus on startup
 
         Grid.children [
             match state.errorMessage with
